@@ -18,6 +18,11 @@ max_torque = 3.842e-03  # 单个电机最大扭矩 单位Nm (电机最大转速2
 # 仿真周期 1000Hz 1ms 0.001s
 dt = 0.001
 
+# Wall collision handling
+wall_geom_id = None
+wall_collision_time = None
+reset_delay = 5.0  # 秒
+
 # 根据电机转速计算电机推力
 def calc_motor_force(krpm):
     global Ct
@@ -65,31 +70,35 @@ def calc_motor_input(krpm):
 
 # 加载模型回调函数
 def load_callback(m=None, d=None):
+    global wall_geom_id
+
     mujoco.set_mjcb_control(None)
     m = mujoco.MjModel.from_xml_path('./crazyfile/scene.xml')
     d = mujoco.MjData(m)
+    wall_geom_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "wall")
+    if wall_geom_id < 0:
+        wall_geom_id = None
     if m is not None:
         mujoco.set_mjcb_control(lambda m, d: control_callback(m, d))  # 设置控制回调函数
     return m, d
 
-# 简易平面圆形轨迹生成
-def simple_trajectory(time):
-    wait_time = 1.5     # 起飞到开始点等待时间
-    height = 0.3        # 绕圈高度
-    radius = 0.5        # 绕圈半径
-    speed = 0.3         # 绕圈速度
-    # 构建机头朝向
-    _cos = np.cos(2*np.pi*speed*(time-wait_time))
-    _sin = np.sin(2*np.pi*speed*(time-wait_time))
-    _heading = np.array([-_sin, _cos, 0])
-    # 首先等待起飞到目标开始点位
-    if time < wait_time:
-        return np.array([radius, 0, height]), np.array([0.0, 1.0, 0.0])  # Start Point
-    # 随后开始绕圈(逆时针旋转)
-    _x = radius * _cos
-    _y = radius * _sin
-    _z = height
-    return np.array([_x, _y, _z]), _heading  # Trajectory Point And Heading
+# 简易前向撞墙轨迹
+def crash_trajectory(time):
+    hover_time = 1.0     # 起飞后悬停时间
+    height = 0.3         # 飞行高度
+    forward_speed = 0.35 # 前飞速度
+    target_x = 0.7       # 目标撞击点 (略大于墙位置保持压住墙面)
+
+    if time < hover_time:
+        goal_pos = np.array([0.0, 0.0, height])
+        goal_vel = np.array([0.0, 0.0, 0.0])
+    else:
+        travel_time = time - hover_time
+        goal_x = min(forward_speed * travel_time, target_x)
+        goal_pos = np.array([goal_x, 0.0, height])
+        goal_vel = np.array([forward_speed, 0.0, 0.0]) if goal_x < target_x else np.array([0.0, 0.0, 0.0])
+    goal_heading = np.array([1.0, 0.0, 0.0])
+    return goal_pos, goal_vel, goal_heading
 
 # 初始化SE3控制器
 ctrl = SE3Controller()
@@ -104,7 +113,7 @@ torque_scale = 0.001 # 控制器控制量到实际扭矩(Nm)的缩放系数(因�
 
 log_count = 0
 def control_callback(m, d):
-    global log_count, gravity, mass, dt
+    global log_count, gravity, mass, dt, wall_geom_id, wall_collision_time
 
     _pos = d.qpos
     _vel = d.qvel
@@ -125,10 +134,8 @@ def control_callback(m, d):
     omega = np.array([gyro_x, gyro_y, gyro_z])  # 角速度
 
     # 构建目标状态
-    # goal_pos, goal_heading = simple_trajectory(d.time)        # 目标位置
-    goal_pos, goal_heading = np.array([0.0, 0.0, 0.3]), np.array([1.0, 0.0, 0.0])  # 目标位置
+    goal_pos, goal_vel, goal_heading = crash_trajectory(d.time)  # 目标位置
 
-    goal_vel = np.array([0, 0, 0])              # 目标速度
     goal_quat = np.array([0.0,0.0,0.0,1.0])     # 目标四元数(无用)
     goal_omega = np.array([0, 0, 0])            # 目标角速度
     goal_state = State(goal_pos, goal_vel, goal_quat, goal_omega)
@@ -151,6 +158,26 @@ def control_callback(m, d):
     d.actuator('motor2').ctrl[0] = calc_motor_input(motor_speed[1])
     d.actuator('motor3').ctrl[0] = calc_motor_input(motor_speed[2])
     d.actuator('motor4').ctrl[0] = calc_motor_input(motor_speed[3])
+
+    # 检测与墙面的碰撞，并在延时后重置仿真
+    if wall_geom_id is not None:
+        collision_with_wall = False
+        for i in range(d.ncon):
+            contact = d.contact[i]
+            if contact.geom1 == wall_geom_id or contact.geom2 == wall_geom_id:
+                collision_with_wall = True
+                break
+        if collision_with_wall and wall_collision_time is None:
+            wall_collision_time = d.time
+
+        if wall_collision_time is not None and d.time - wall_collision_time >= reset_delay:
+            mujoco.mj_resetData(m, d)
+            mujoco.mj_forward(m, d)
+            # Reset motors to avoid residual inputs on the next step
+            d.ctrl[:] = 0
+            log_count = 0
+            wall_collision_time = None
+            return
 
     log_count += 1
     if log_count >= 500:
