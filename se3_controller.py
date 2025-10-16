@@ -5,17 +5,20 @@ import geometry
 
 class State:
     # 四元数顺序 x y z w
-    def __init__(self, pos, vel, quat, omega):
+    def __init__(self, pos, vel, quat, omega, acc=None):
         self.position = pos     # x y z
         self.velocity = vel     # x y z
         self.quaternion = quat  # x y z w 
         self.omega = omega      # x y z
+        self.acceleration = acc if acc is not None else np.zeros(3)  # x y z
 
-    def update(self, pos, vel, quat, omega):
+    def update(self, pos, vel, quat, omega, acc=None):
         self.position = pos
         self.velocity = vel
         self.quaternion = quat
         self.omega = omega
+        if acc is not None:
+            self.acceleration = acc
 
 class Control_Command:
     # thrust: 总推力
@@ -32,7 +35,8 @@ class SE3Controller:
         self.kv = 0.0  # 速度控制反馈系数
         self.kR = 0.0  # SO3控制反馈系数
         self.kw = 0.0 # 角速度控制反馈系数
-        self.gravity = np.array([0.0, 0.0, -1.0])  # 重力加速度矢量方向
+        self.gravity = np.array([0.0, 0.0, -1.0])  # 重力方向(归一化)
+        self.gravity_mag = 9.8066  # 重力加速度大小 m/s^2
 
     def set_current_state(self, state: State):
         self.current_state = state
@@ -122,11 +126,9 @@ class SE3Controller:
         self.current_state = current_state
         self.goal_state = goal_state
         e_x, e_v = self.update_linear_error()
-        # 位置速度控制(线性控制)
-        x = -self.kx * e_x[0] - self.kv * e_v[0] + self.goal_state.velocity[0]
-        y = -self.kx * e_x[1] - self.kv * e_v[1] + self.goal_state.velocity[1]
-        z = -self.kx * e_x[2] - self.kv * e_v[2] + self.goal_state.velocity[2]
-        trans_control = np.array([x, y, z])  # 位移线性控制量
+        # 位置-速度控制 -> 归一化加速度指令 (单位为g)
+        acc_feedforward = self.goal_state.acceleration / self.gravity_mag
+        trans_control = -self.kx * e_x - self.kv * e_v + acc_feedforward
         e_R, e_w, thrust = self.update_angular_error(trans_control, forward)
         # 姿态控制(角速度控制)
         # self.kw * e_w[0] 表示要使得在目标系中有预期的角速度的在当前坐标系中的误差 算是一种前馈补偿

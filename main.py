@@ -84,21 +84,36 @@ def load_callback(m=None, d=None):
 
 # 简易前向撞墙轨迹
 def crash_trajectory(time):
-    hover_time = 1.0     # 起飞后悬停时间
-    height = 0.3         # 飞行高度
-    forward_speed = 0.35 # 前飞速度
-    target_x = 0.7       # 目标撞击点 (略大于墙位置保持压住墙面)
+    hover_time = 1.0         # 起飞后悬停时间
+    height = 0.3             # 飞行高度
+    attack_acc = 3.5         # 前冲加速度 m/s^2
+    attack_max_speed = 2.0   # 前冲最大速度 m/s
 
     if time < hover_time:
         goal_pos = np.array([0.0, 0.0, height])
         goal_vel = np.array([0.0, 0.0, 0.0])
+        goal_acc = np.array([0.0, 0.0, 0.0])
     else:
-        travel_time = time - hover_time
-        goal_x = min(forward_speed * travel_time, target_x)
-        goal_pos = np.array([goal_x, 0.0, height])
-        goal_vel = np.array([forward_speed, 0.0, 0.0]) if goal_x < target_x else np.array([0.0, 0.0, 0.0])
+        tau = time - hover_time
+        accel_time = attack_max_speed / attack_acc
+        accel_distance = 0.5 * attack_acc * accel_time**2
+
+        if tau < accel_time:
+            pos_x = 0.5 * attack_acc * tau**2
+            vel_x = attack_acc * tau
+            acc_x = attack_acc
+        else:
+            cruise_time = tau - accel_time
+            pos_x = accel_distance + attack_max_speed * cruise_time
+            vel_x = attack_max_speed
+            acc_x = 0.0
+
+        goal_pos = np.array([pos_x, 0.0, height])
+        goal_vel = np.array([vel_x, 0.0, 0.0])
+        goal_acc = np.array([acc_x, 0.0, 0.0])
+
     goal_heading = np.array([1.0, 0.0, 0.0])
-    return goal_pos, goal_vel, goal_heading
+    return goal_pos, goal_vel, goal_acc, goal_heading
 
 # 初始化SE3控制器
 ctrl = SE3Controller()
@@ -134,13 +149,14 @@ def control_callback(m, d):
     omega = np.array([gyro_x, gyro_y, gyro_z])  # 角速度
 
     # 构建目标状态
-    goal_pos, goal_vel, goal_heading = crash_trajectory(d.time)  # 目标位置
+    goal_pos, goal_vel, goal_acc, goal_heading = crash_trajectory(d.time)  # 目标位置
 
     goal_quat = np.array([0.0,0.0,0.0,1.0])     # 目标四元数(无用)
     goal_omega = np.array([0, 0, 0])            # 目标角速度
-    goal_state = State(goal_pos, goal_vel, goal_quat, goal_omega)
+    goal_state = State(goal_pos, goal_vel, goal_quat, goal_omega, acc=goal_acc)
     # 构建当前状态
-    curr_state = State(_pos, _vel, quat, omega)
+    curr_acc = _acc[:3] if _acc.size >= 3 else np.zeros(3)
+    curr_state = State(_pos, _vel, quat, omega, acc=curr_acc)
 
     # 更新控制器
     # forward = np.array([1.0, 0.0, 0.0])  # 前向方向
