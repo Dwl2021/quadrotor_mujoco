@@ -1,19 +1,14 @@
 # 20250220 Wakkk
 # Quadrotor SE3 Control Demo
-import mujoco 
-import mujoco.viewer as viewer 
+import mujoco
+import mujoco.viewer as viewer
 import numpy as np
 from se3_controller import *
 from motor_mixer import *
+from quad_utils import PARAMS, calc_motor_input
 
-gravity = 9.8066        # 重力加速度 单位m/s^2
-mass = 0.033            # 飞行器质量 单位kg
-Ct = 3.25e-4            # 电机推力系数 (N/krpm^2)
-Cd = 7.9379e-6          # 电机反扭系数 (Nm/krpm^2)
-
-arm_length = 0.065/2.0  # 电机力臂长度 单位m
-max_thrust = 0.1573     # 单个电机最大推力 单位N (电机最大转速22krpm)
-max_torque = 3.842e-03  # 单个电机最大扭矩 单位Nm (电机最大转速22krpm)
+gravity = PARAMS.gravity        # 重力加速度 单位m/s^2
+mass = PARAMS.mass              # 飞行器质量 单位kg
 
 # 仿真周期 1000Hz 1ms 0.001s
 dt = 0.001
@@ -22,51 +17,6 @@ dt = 0.001
 wall_geom_id = None
 wall_collision_time = None
 reset_delay = 5.0  # 秒
-
-# 根据电机转速计算电机推力
-def calc_motor_force(krpm):
-    global Ct
-    return Ct * krpm**2
-
-# 根据推力计算电机转速
-def calc_motor_speed_by_force(force):
-    global max_thrust
-    if force > max_thrust:
-        force = max_thrust
-    elif force < 0:
-        force = 0
-    return np.sqrt(force / Ct)
-
-# 根据扭矩计算电机转速 注意返回数值为转速绝对值 根据实际情况决定转速是增加还是减少
-def calc_motor_speed_by_torque(torque):
-    global max_torque
-    if torque > max_torque:  # 扭矩绝对值限制
-        torque = max_torque
-    return np.sqrt(torque / Cd)
-
-# 根据电机转速计算电机转速
-def calc_motor_speed(force):
-    if force > 0:
-        return calc_motor_speed_by_force(force)
-
-# 根据电机转速计算电机扭矩
-def calc_motor_torque(krpm):
-    global Cd
-    return Cd * krpm**2
-
-# 根据电机转速计算电机归一化输入
-def calc_motor_input(krpm):
-    if krpm > 22:
-        krpm = 22
-    elif krpm < 0:
-        krpm = 0
-    _force = calc_motor_force(krpm)
-    _input = _force / max_thrust
-    if _input > 1:
-        _input = 1
-    elif _input < 0:
-        _input = 0
-    return _input
 
 # 加载模型回调函数
 def load_callback(m=None, d=None):

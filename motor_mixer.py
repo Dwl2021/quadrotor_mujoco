@@ -38,11 +38,20 @@ class Mixer:
         min_trim_scale = 1.0
         if max_value > self.max_speed **2: # 存在电机动力饱和 计算缩放因子进行缩放
             # print(f"Max Overflow")
-            max_trim_scale = (self.max_speed ** 2 - ref_value)/(max_value - ref_value)
+            denom = max_value - ref_value
+            if denom > 1e-9:
+                max_trim_scale = (self.max_speed ** 2 - ref_value)/denom
+            else:
+                max_trim_scale = 0.0
         if min_value < 0: # 存在电机动力负饱和 计算缩放因子进行缩放
             # print(f"Min Overflow")
-            min_trim_scale = (ref_value)/(ref_value - min_value)
+            denom = ref_value - min_value
+            if denom > 1e-9:
+                min_trim_scale = (ref_value)/(denom)
+            else:
+                min_trim_scale = 0.0
         scale = min(max_trim_scale, min_trim_scale)
+        scale = max(scale, 0.0)
         # print(f"Trim Scale:{scale}")
         # 对X Y扭矩施加缩放因子
         Mx = Mx * scale  
@@ -54,7 +63,7 @@ class Mixer:
         # print(f"Original Torque: Mx:{Mx/scale:.6f} My:{My/scale:.6f} Trimed Torque: Mx:{Mx:.6f} My:{My:.6f}")
         if scale < 1.0: # 存在Trim 不进行Z轴扭矩分配 直接返回
             # 这里需要强行进行一下绝对值
-            motor_speed_squ = np.abs(motor_speed_squ)
+            motor_speed_squ = np.clip(np.abs(motor_speed_squ), 0.0, self.max_speed ** 2)
             return np.sqrt(motor_speed_squ)  # 返回电机转速
         else: # 仍然有余量 可以进行Z轴扭矩分配
             Mz = mz
@@ -69,11 +78,20 @@ class Mixer:
             min_trim_scale_z = 1.0
             if max_value > self.max_speed **2: # 存在电机动力饱和 计算缩放因子进行缩放
                 # print(f"Z Max Overflow")
-                max_trim_scale_z = (self.max_speed ** 2 - motor_speed_squ[max_index])/(max_value - motor_speed_squ[max_index])
+                denom = max_value - motor_speed_squ[max_index]
+                if denom > 1e-9:
+                    max_trim_scale_z = (self.max_speed ** 2 - motor_speed_squ[max_index]) / denom
+                else:
+                    max_trim_scale_z = 0.0
             if min_value < 0: # 存在电机动力负饱和 计算缩放因子进行缩放
                 # print(f"Z Min Overflow")
-                min_trim_scale_z = (motor_speed_squ[min_index])/(motor_speed_squ[min_index] - min_value)
+                denom = motor_speed_squ[min_index] - min_value
+                if denom > 1e-9:
+                    min_trim_scale_z = (motor_speed_squ[min_index]) / denom
+                else:
+                    min_trim_scale_z = 0.0
             scale_z = min(max_trim_scale_z, min_trim_scale_z)
+            scale_z = max(scale_z, 0.0)
             # 对Z轴扭矩施加缩放因子
             Mz = Mz * scale_z
             # 重新计算电机转速平方
@@ -81,7 +99,8 @@ class Mixer:
             motor_speed_squ_withz = self.inv_mat @ control_input_withz
             # print(f"motor_speed_squ:{motor_speed_squ_withz}")
             # print(f"Original Torque: Mx:{Mx/scale:.6f} My:{My/scale:.6f} Mz:{Mz/scale_z:.6f} Trimed Torque: Mx:{Mx:.6f} My:{My:.6f} Mz:{Mz:.6f}")
-            motor_speed_squ = np.abs(motor_speed_squ)
+            motor_speed_squ = np.clip(np.abs(motor_speed_squ), 0.0, self.max_speed ** 2)
+            motor_speed_squ_withz = np.clip(np.abs(motor_speed_squ_withz), 0.0, self.max_speed ** 2)
             return np.sqrt(motor_speed_squ_withz)  # 返回电机转速
 
 
